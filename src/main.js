@@ -39,35 +39,21 @@ const geometry = new THREE.BoxGeometry();
 const material = new THREE.MeshBasicMaterial({
     color: 0x00ff00,
     wireframe: true,
-})
+});
+const cube = new THREE.Mesh(geometry, material);
 
-const cube = new THREE.Mesh(geometry, material)
+cube.position.y = 0.8;
 
-scene.add(cube)
+scene.add(cube);
 
-//camera.lookAt(cube.position)
+// Adaptar cámara en caso de girar la pantalla del celular
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
 
-renderer.render(scene, camera)
-
-let isPressed = false
-
-window.addEventListener('mousedown', () => {
-    isPressed = true;
-    text.textContent = 'Se mueve'
-})
-
-window.addEventListener('mouseup', () => {
-    isPressed = false;
-    text.textContent = 'No se mueve'
-})
-
-
-
-
-/*if (isPressed === true) {
-        cube.rotation.y + yMouse
-        cube.rotation.z + xMouse
-    }*/
+// Bucle de animación
 function animate() {
     requestAnimationFrame(animate);
     if (isPressed === true) {
