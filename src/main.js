@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-const buttonRight = document.getElementById('right')
+
 
 const text = document.getElementById('text')
 
@@ -26,8 +26,8 @@ const camera = new THREE.PerspectiveCamera(
     far
 )
 
-camera.position.z = 2;
-camera.position.y = 2;
+camera.position.z = 3;
+camera.position.y = 0
 
 const renderer = new THREE.WebGLRenderer();
 
@@ -45,7 +45,7 @@ const cube = new THREE.Mesh(geometry, material)
 
 scene.add(cube)
 
-camera.lookAt(cube.position)
+//camera.lookAt(cube.position)
 
 renderer.render(scene, camera)
 
@@ -53,12 +53,12 @@ let isPressed = false
 
 window.addEventListener('mousedown', () => {
     isPressed = true;
-    text.textContent = isPressed
+    text.textContent = 'Se mueve'
 })
 
 window.addEventListener('mouseup', () => {
     isPressed = false;
-    text.textContent = 'No se movera'
+    text.textContent = 'No se mueve'
 })
 
 
@@ -79,4 +79,3 @@ function animate() {
 
 animate()
 
-window.isProcessed = isPressed
