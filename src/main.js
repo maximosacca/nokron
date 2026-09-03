@@ -131,7 +131,7 @@ let spawnTimer = 0;
 
 window.addEventListener('pointerdown', () => {
     isPressed = true;
-    text.textContent = 'Escaneando...';
+    text.textContent = 'Se mueve';
 });
 window.addEventListener('pointerup', () => {
     isPressed = false;
