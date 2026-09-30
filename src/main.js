@@ -38,9 +38,6 @@ glow.position.set(-2, 1, 2);
 scene.add(glow);
 
 // --- 4. AUDIO (Tone.js) ---
-// Nota: los avisos "AudioContext was not allowed to start" son normales:
-// Tone crea su contexto al cargar y Chrome lo deja suspendido hasta un gesto.
-// El audio se arranca en el primer gesto VÁLIDO (pointerup / touchend / click / keydown).
 const synthConfigs = [
     { osc: 'sine', mod: 'square', baseHarm: 1 },
     { osc: 'triangle', mod: 'sine', baseHarm: 2 },
@@ -59,18 +56,14 @@ let masterVolume = null;
 let masterLimiter = null;
 let masterFilter = null;
 
-// Valores suavizados que se envían a los sintes (evita clicks y saturar Tone.js)
 const audioState = { freq: 100, mod: 1, harm: 1, cutoff: 3000, spread: 0 };
 
-// Distancia entre planos (totalHeight, 0.5–4) -> 0..1. Se usa para modular el sinte.
 const alturaNormalizada = () => THREE.MathUtils.clamp((params.totalHeight - 0.5) / 3.5, 0, 1);
-// Más separación = más brillo (filtro más abierto) y más separación de afinación entre voces
-const cutoffDesdeAltura = (n) => Math.min(500 * Math.pow(2, n * 6), 16000); // 500 Hz – 16 kHz
-const spreadDesdeAltura = (n) => n * 40; // 0 – 40 cents entre voces contiguas
+const cutoffDesdeAltura = (n) => Math.min(500 * Math.pow(2, n * 6), 16000); 
+const spreadDesdeAltura = (n) => n * 40; 
 
 const volToDb = (v) => (v <= -40 ? -100 : v);
 
-// Cartel que avisa que hay que tocar para activar el sonido
 const audioHint = document.createElement('div');
 audioHint.textContent = 'TOCÁ LA PANTALLA PARA ACTIVAR EL SONIDO';
 audioHint.style.cssText = `
@@ -105,24 +98,21 @@ async function pedirWakeLock() {
 }
 
 function pedirPermisoOrientacion() {
-    // iOS/iPadOS exige permiso explícito (debe pedirse dentro de un gesto)
     try {
         if (typeof DeviceOrientationEvent !== 'undefined' &&
             typeof DeviceOrientationEvent.requestPermission === 'function') {
             DeviceOrientationEvent.requestPermission().catch(() => {});
         }
-    } catch (err) { /* ignorar */ }
+    } catch (err) { }
 }
 
 function crearSintes() {
     const volSliderEl = document.getElementById('vol-slider');
     const startVol = volSliderEl ? parseFloat(volSliderEl.value) : -10;
 
-    // Cadena: sintes -> gains -> filtro -> volumen -> limiter -> salida
     masterLimiter = new Tone.Limiter(-2).toDestination();
     masterVolume = new Tone.Volume(volToDb(startVol)).connect(masterLimiter);
 
-    // Filtro controlado por el pellizco de dos dedos (distancia entre planos)
     const n0 = alturaNormalizada();
     audioState.cutoff = cutoffDesdeAltura(n0);
     audioState.spread = spreadDesdeAltura(n0);
@@ -131,6 +121,7 @@ function crearSintes() {
     for (let i = 0; i < 5; i++) {
         const gainNode = new Tone.Gain(0).connect(masterFilter);
         const s = new Tone.FMSynth({
+            volume: -8, // ARREGLO DIGITAL: -8dB para dar respiro al dispositivo y evitar petardeos
             harmonicity: synthConfigs[i].baseHarm,
             modulationIndex: 1,
             oscillator: { type: synthConfigs[i].osc },
@@ -146,7 +137,6 @@ function crearSintes() {
 }
 
 async function onUserGesture() {
-    // Si el audio ya corre, solo intentamos recuperarlo si el navegador lo suspendió
     if (audioActivo) {
         const ctx = Tone.getContext();
         if (ctx.state !== 'running') ctx.resume().catch(() => {});
@@ -155,7 +145,6 @@ async function onUserGesture() {
     if (inicializandoAudio) return;
     inicializandoAudio = true;
 
-    // Todo esto se lanza SIN await previo, dentro del gesto del usuario
     entrarPantallaCompleta();
     pedirPermisoOrientacion();
     wakeLockDeseado = true;
@@ -172,13 +161,10 @@ async function onUserGesture() {
         console.log('Sistema de audio en línea: 5 sintes activados');
     } catch (err) {
         console.warn('El audio no arrancó, se reintentará en el próximo toque:', err);
-        inicializandoAudio = false; // permite reintentar
+        inicializandoAudio = false; 
     }
 }
 
-// Eventos que Chrome considera "activación de usuario" para audio.
-// (pointerdown y touchstart NO cuentan). Sin "once": la guarda interna evita duplicados
-// y permite reintentar si falla o si el contexto se suspende después.
 ['pointerup', 'touchend', 'click', 'keydown'].forEach((ev) =>
     window.addEventListener(ev, onUserGesture, { capture: true, passive: true })
 );
@@ -204,7 +190,7 @@ function cargarMemoria(index) {
         (texture) => {
             texture.mapping = THREE.EquirectangularReflectionMapping;
             texture.colorSpace = THREE.SRGBColorSpace;
-            texture.flipY = false; // se mantiene como en tu versión; si el reflejo se ve invertido, borrá esta línea
+            texture.flipY = false; 
 
             const anterior = currentEnvTexture;
             scene.background = new THREE.Color(0x05080a);
@@ -283,12 +269,11 @@ function updateMaterial() {
 }
 buildGroup();
 
-// Inicia una transformación de perfil (y sincroniza el selector del panel)
 function startMorph(newIndex) {
     if (newIndex < 0 || newIndex >= PROFILE_CYCLE.length) return;
     if (morphProgress < 1.0) {
         if (newIndex === targetProfileIndex) return;
-        currentProfileIndex = targetProfileIndex; // cerramos la transformación en curso
+        currentProfileIndex = targetProfileIndex; 
     }
     if (newIndex === currentProfileIndex) { morphProgress = 1.0; return; }
     targetProfileIndex = newIndex;
@@ -298,7 +283,7 @@ function startMorph(newIndex) {
     if (uiSelect) uiSelect.value = params.profile;
 }
 
-// --- 8. OBJETOS DE REFERENCIA (Ocultos, no se agregan a la escena) ---
+// --- 8. OBJETOS DE REFERENCIA (Ocultos) ---
 const referenceGroup = new THREE.Group();
 const refShapes = [
     { color: 0xff8844, pos: [3.2, 1.2, -1], geo: new THREE.BoxGeometry(1.2, 1.2, 1.2) },
@@ -394,7 +379,6 @@ function resetIdleTimer() {
     idleTimer = setTimeout(() => { idleText.style.opacity = '0.6'; }, 10000);
 }
 
-// Solo cuenta la interacción con el canvas (no las flechas, el slider ni el panel)
 renderer.domElement.addEventListener('pointermove', resetIdleTimer);
 renderer.domElement.addEventListener('pointerdown', resetIdleTimer);
 renderer.domElement.addEventListener('touchstart', resetIdleTimer, { passive: true });
@@ -430,7 +414,6 @@ function setUIVisible(visible) {
 }
 setUIVisible(isDevMode);
 
-// Esquina secreta: 5 toques rápidos muestran/ocultan el menú
 const secretCorner = document.createElement('div');
 secretCorner.style.cssText = 'position: fixed; top: 0; left: 0; width: 70px; height: 70px; z-index: 20;';
 document.body.appendChild(secretCorner);
@@ -508,7 +491,6 @@ function addSlider(label, key, min, max, step) {
     wrapper.appendChild(headerRow);
     wrapper.appendChild(input);
     panel.appendChild(wrapper);
-    // Guardamos fmt para poder refrescar el texto cuando el valor cambia por gestos
     controlsRegistry[key] = { type: 'slider', input, span, fmt };
 }
 
@@ -580,7 +562,6 @@ addSlider('Velocidad de respiración', 'breathSpeed', 0, 10, 0.1);
 addSlider('Rotación pasiva', 'idleRotSpeed', 0, 1.5, 0.02);
 addCheckbox('Reacciona al presionar', 'touchReacts');
 
-// Refresca en el panel los valores que cambian por gestos (pellizco, arrastre, inclinación)
 function syncPanelFromParams() {
     for (const key of ['totalHeight', 'jitter', 'spiralRadius']) {
         const c = controlsRegistry[key];
@@ -591,7 +572,6 @@ function syncPanelFromParams() {
 // --- 11. INTERACCIÓN ---
 let isPressed = false;
 const releasePress = () => { isPressed = false; };
-// Solo el canvas activa la reacción; flechas, slider y panel no cuentan como interacción
 renderer.domElement.addEventListener('pointerdown', () => { isPressed = true; });
 window.addEventListener('pointerup', releasePress);
 window.addEventListener('pointercancel', releasePress);
@@ -608,7 +588,6 @@ let touchesActive = 0;
 let pinchStartDist = null;
 let pinchStartHeight = params.totalHeight;
 
-// Toque simple = siguiente perfil. Doble toque = siguiente memoria (fondo 360º).
 let ultimoTapTime = 0;
 let tapTimer = null;
 const TAP_WINDOW = 400;
@@ -623,7 +602,6 @@ function handleTap() {
         cargarMemoria(memoriaActual);
     } else {
         ultimoTapTime = ahora;
-        // Esperamos por si llega un segundo toque, para no disparar ambas acciones
         tapTimer = setTimeout(() => {
             tapTimer = null;
             if (morphProgress >= 1.0) startMorph((targetProfileIndex + 1) % PROFILE_CYCLE.length);
@@ -684,17 +662,16 @@ dom.addEventListener('touchend', (e) => {
         touchStartTime = performance.now();
         touchStartX = e.touches[0].clientX;
         touchStartY = e.touches[0].clientY;
-        touchHasDragged = true; // venía de un pellizco: no cuenta como toque
+        touchHasDragged = true; 
     }
 }, { passive: true });
 
 dom.addEventListener('touchcancel', () => {
     touchesActive = 0;
     pinchStartDist = null;
-    controls.enabled = true; // evita que la cámara quede bloqueada
+    controls.enabled = true; 
 }, { passive: true });
 
-// Mouse / lápiz (para probar en PC): clic simple y doble clic sin arrastre
 let mouseDownX = 0;
 let mouseDownY = 0;
 let mouseDownTime = 0;
@@ -710,7 +687,6 @@ dom.addEventListener('pointerup', (e) => {
     if (moved < 6 && performance.now() - mouseDownTime < 300) handleTap();
 });
 
-// Inclinación del dispositivo
 let tiltTarget = 0;
 window.addEventListener('deviceorientation', (e) => {
     if (!params.gesturesEnabled) return;
@@ -726,7 +702,6 @@ window.addEventListener('resize', () => {
 });
 
 // --- 12. LOOP DE ANIMACIÓN Y SONIDO ---
-// Reloj propio (THREE.Clock está deprecado). El delta se limita para evitar saltos al volver de otra pestaña.
 let lastFrameTime = performance.now();
 let time = 0;
 
@@ -757,7 +732,6 @@ function animate(now) {
         if (touchesActive === 0 && params.jitter > 0) params.jitter = Math.max(0, params.jitter - delta * 0.5);
     }
 
-    // Refresco periódico del panel (solo en modo dev, ~5 veces por segundo)
     if (uiVisible) {
         syncPanelTimer += delta;
         if (syncPanelTimer > 0.2) { syncPanelTimer = 0; syncPanelFromParams(); }
@@ -801,7 +775,7 @@ function animate(now) {
 
     ente.rotation.y += delta * params.idleRotSpeed * (reacting ? 2.2 : 1);
 
-    const isInteracting = (touchesActive > 0 || isPressed); // las flechas no cuentan
+    const isInteracting = (touchesActive > 0 || isPressed);
     const targetInteraction = isInteracting ? 1.0 : 0.20;
     const fadeSpeed = isInteracting ? 2.0 : 0.4;
     interactionLevel = THREE.MathUtils.lerp(interactionLevel, targetInteraction, Math.min(delta * fadeSpeed, 1));
@@ -817,9 +791,6 @@ function animate(now) {
     }
     controls.update();
 
-    // --- Audio ---
-    // Se usa .value (no rampTo) para no acumular eventos de automatización en cada frame,
-    // y se suaviza en JS para evitar clicks.
     if (audioActivo && synths.length > 0) {
         const polar = controls.getPolarAngle();
         const targetFreq = THREE.MathUtils.mapLinear(polar, 0, Math.PI, 60, 400);
@@ -832,20 +803,28 @@ function animate(now) {
         audioState.mod += (targetMod - audioState.mod) * k;
         audioState.harm += (targetHarm - audioState.harm) * k;
 
-        // Pellizco de dos dedos (distancia entre planos) -> brillo y desafinación entre voces
         const alturaN = alturaNormalizada();
         const targetCutoff = cutoffDesdeAltura(alturaN);
-        // El filtro se suaviza en escala logarítmica (así se percibe parejo)
         audioState.cutoff = Math.exp(Math.log(audioState.cutoff) + (Math.log(targetCutoff) - Math.log(audioState.cutoff)) * k);
         audioState.spread += (spreadDesdeAltura(alturaN) - audioState.spread) * k;
         if (masterFilter) masterFilter.frequency.value = audioState.cutoff;
 
-        synths.forEach((s, i) => {
+        // ARREGLO DE RENDIMIENTO: Solo actualizamos los cálculos del sintetizador que está sonando.
+        // Ignoramos a los demás para que el procesador de la tablet respire y no petardee.
+        const updateSynth = (index) => {
+            const s = synths[index];
             s.frequency.value = audioState.freq;
             s.modulationIndex.value = audioState.mod;
-            s.harmonicity.value = audioState.harm * synthConfigs[i].baseHarm;
-            s.detune.value = (i - 2) * audioState.spread; // -2..+2 veces el spread, en cents
-        });
+            s.harmonicity.value = audioState.harm * synthConfigs[index].baseHarm;
+            s.detune.value = (index - 2) * audioState.spread; 
+        };
+
+        updateSynth(currentProfileIndex);
+        
+        // Si hay una transformación en progreso, también actualizamos el sintetizador de destino
+        if (morphProgress < 1.0 && targetProfileIndex !== currentProfileIndex) {
+            updateSynth(targetProfileIndex);
+        }
 
         for (let i = 0; i < synthGains.length; i++) {
             let g = 0;
