@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import * as Tone from 'tone';
+import {iniciarNarrativa} from './narrativa.js'
 
 // --- 0. MODO EXHIBICIÓN vs. MODO DESARROLLO ---
 const isDevMode = new URLSearchParams(window.location.search).has('dev');
@@ -8,6 +9,24 @@ let uiVisible = isDevMode;
 
 const text = document.getElementById('text');
 if (text) text.style.display = isDevMode ? 'block' : 'none';
+
+// --- 0.1 MODO KIOSCO: nada seleccionable, sin menú de copiar/pegar ni gestos nativos ---
+// Se inyecta desde JS para que funcione aunque style.css no esté actualizado.
+const kioskStyle = document.createElement('style');
+kioskStyle.textContent = `
+    html, body { overscroll-behavior: none; touch-action: none; }
+    * {
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
+    }
+    canvas { outline: none; }
+`;
+document.head.appendChild(kioskStyle);
+['contextmenu', 'selectstart', 'dragstart'].forEach((ev) =>
+    document.addEventListener(ev, (e) => e.preventDefault())
+);
 
 // --- 1. CONFIGURACIÓN BÁSICA ---
 const scene = new THREE.Scene();
@@ -59,8 +78,8 @@ let masterFilter = null;
 const audioState = { freq: 100, mod: 1, harm: 1, cutoff: 3000, spread: 0 };
 
 const alturaNormalizada = () => THREE.MathUtils.clamp((params.totalHeight - 0.5) / 3.5, 0, 1);
-const cutoffDesdeAltura = (n) => Math.min(500 * Math.pow(2, n * 6), 16000); 
-const spreadDesdeAltura = (n) => n * 40; 
+const cutoffDesdeAltura = (n) => Math.min(500 * Math.pow(2, n * 6), 16000);
+const spreadDesdeAltura = (n) => n * 40;
 
 const volToDb = (v) => (v <= -40 ? -100 : v);
 
@@ -74,8 +93,13 @@ audioHint.style.cssText = `
 `;
 document.body.appendChild(audioHint);
 
+// Pantalla completa: se reintenta en cada toque por si algo la cerró (la API exige un gesto del usuario).
+let lastFsAttempt = 0;
 function entrarPantallaCompleta() {
-    if (isDevMode || document.fullscreenElement) return;
+    if (isDevMode || document.fullscreenElement || document.webkitFullscreenElement) return;
+    const ahora = performance.now();
+    if (ahora - lastFsAttempt < 1000) return; // un toque dispara varios eventos; pedimos una sola vez
+    lastFsAttempt = ahora;
     const el = document.documentElement;
     const req = el.requestFullscreen || el.webkitRequestFullscreen;
     if (!req) return;
@@ -87,15 +111,22 @@ function entrarPantallaCompleta() {
     }
 }
 
+// Wake lock: evita que la pantalla se apague (y por lo tanto que aparezca el bloqueo de pantalla).
 async function pedirWakeLock() {
+    if (!('wakeLock' in navigator) || document.visibilityState !== 'visible') return;
+    if (wakeLockSentinel && !wakeLockSentinel.released) return;
     try {
-        if ('wakeLock' in navigator) {
-            wakeLockSentinel = await navigator.wakeLock.request('screen');
-        }
+        wakeLockSentinel = await navigator.wakeLock.request('screen');
+        wakeLockSentinel.addEventListener('release', () => {
+            // Si el sistema lo libera (ahorro de batería, pérdida de foco), se vuelve a pedir
+            if (wakeLockDeseado && document.visibilityState === 'visible') pedirWakeLock();
+        });
     } catch (err) {
         console.warn('No se pudo bloquear la suspensión de pantalla:', err);
     }
 }
+// Red de seguridad: cada 20 s verifica que el wake lock siga activo
+setInterval(() => { if (wakeLockDeseado) pedirWakeLock(); }, 20000);
 
 function pedirPermisoOrientacion() {
     try {
@@ -121,7 +152,7 @@ function crearSintes() {
     for (let i = 0; i < 5; i++) {
         const gainNode = new Tone.Gain(0).connect(masterFilter);
         const s = new Tone.FMSynth({
-            volume: -8, // ARREGLO DIGITAL: -8dB para dar respiro al dispositivo y evitar petardeos
+            volume: -8,
             harmonicity: synthConfigs[i].baseHarm,
             modulationIndex: 1,
             oscillator: { type: synthConfigs[i].osc },
@@ -137,6 +168,10 @@ function crearSintes() {
 }
 
 async function onUserGesture() {
+    // En cada toque: recupera pantalla completa y wake lock si se perdieron
+    entrarPantallaCompleta();
+    if (wakeLockDeseado) pedirWakeLock();
+
     if (audioActivo) {
         const ctx = Tone.getContext();
         if (ctx.state !== 'running') ctx.resume().catch(() => {});
@@ -145,7 +180,6 @@ async function onUserGesture() {
     if (inicializandoAudio) return;
     inicializandoAudio = true;
 
-    entrarPantallaCompleta();
     pedirPermisoOrientacion();
     wakeLockDeseado = true;
     pedirWakeLock();
@@ -161,7 +195,7 @@ async function onUserGesture() {
         console.log('Sistema de audio en línea: 5 sintes activados');
     } catch (err) {
         console.warn('El audio no arrancó, se reintentará en el próximo toque:', err);
-        inicializandoAudio = false; 
+        inicializandoAudio = false;
     }
 }
 
@@ -190,7 +224,7 @@ function cargarMemoria(index) {
         (texture) => {
             texture.mapping = THREE.EquirectangularReflectionMapping;
             texture.colorSpace = THREE.SRGBColorSpace;
-            texture.flipY = false; 
+            texture.flipY = false;
 
             const anterior = currentEnvTexture;
             scene.background = new THREE.Color(0x05080a);
@@ -273,7 +307,7 @@ function startMorph(newIndex) {
     if (newIndex < 0 || newIndex >= PROFILE_CYCLE.length) return;
     if (morphProgress < 1.0) {
         if (newIndex === targetProfileIndex) return;
-        currentProfileIndex = targetProfileIndex; 
+        currentProfileIndex = targetProfileIndex;
     }
     if (newIndex === currentProfileIndex) { morphProgress = 1.0; return; }
     targetProfileIndex = newIndex;
@@ -295,50 +329,12 @@ refShapes.forEach((s) => {
     referenceGroup.add(m);
 });
 
-// --- 9. D-PAD DE ROTACIÓN DE CÁMARA ---
-const dpadCont = document.createElement('div');
-dpadCont.style.cssText = `
-    position: fixed; bottom: 20px; left: 20px; z-index: 10;
-    display: none;
-    grid-template-columns: repeat(3, 45px); grid-template-rows: repeat(3, 45px); gap: 5px; opacity: 0.85;
-`;
-document.body.appendChild(dpadCont);
-
-function updateDpadVisibility() {
-    dpadCont.style.display = params.gesturesEnabled ? 'grid' : 'none';
-}
-updateDpadVisibility();
-
-const btnStyle = `
-    background: #001a0dee; border: 1px solid #33ffaa; border-radius: 8px;
-    color: #66ffaa; display: flex; align-items: center; justify-content: center;
-    font-size: 20px; cursor: pointer; user-select: none; touch-action: none;
-`;
-
-const manualRotation = { x: 0, y: 0 };
-function createDpadBtn(col, row, icon, prop, val) {
-    const btn = document.createElement('div');
-    btn.style.cssText = btnStyle + `grid-column: ${col}; grid-row: ${row};`;
-    btn.innerHTML = icon;
-    const start = (e) => { e.preventDefault(); manualRotation[prop] = val; };
-    const end = (e) => { e.preventDefault(); manualRotation[prop] = 0; };
-    btn.addEventListener('pointerdown', start);
-    btn.addEventListener('pointerup', end);
-    btn.addEventListener('pointerleave', end);
-    btn.addEventListener('pointercancel', end);
-    btn.addEventListener('contextmenu', (e) => e.preventDefault());
-    dpadCont.appendChild(btn);
-}
-createDpadBtn(2, 1, '▲', 'y', -0.03);
-createDpadBtn(2, 3, '▼', 'y', 0.03);
-createDpadBtn(1, 2, '◀', 'x', -0.03);
-createDpadBtn(3, 2, '▶', 'x', 0.03);
-
-// --- 9.5 SLIDER DE VOLUMEN ---
+// --- 9.5 VOLUMEN (solo visible en modo dev / panel secreto) ---
+// En la muestra el volumen se regula con los botones físicos de la tablet.
 const volCont = document.createElement('div');
 volCont.style.cssText = `
     position: fixed; bottom: 30px; right: 20px; z-index: 10;
-    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    display: none; flex-direction: column; align-items: center; gap: 8px;
     color: #66ffaa; font-family: monospace; font-size: 11px; opacity: 0.85;
 `;
 document.body.appendChild(volCont);
@@ -361,28 +357,6 @@ volSlider.addEventListener('input', (e) => {
     if (masterVolume) masterVolume.volume.value = volToDb(parseFloat(e.target.value));
 });
 
-// --- 9.8 SISTEMA DE INACTIVIDAD ---
-const idleText = document.createElement('div');
-idleText.textContent = 'INTERACTÚA CON EL OBJETO';
-idleText.style.cssText = `
-    position: fixed; bottom: 120px; left: 50%; transform: translateX(-50%);
-    color: #88ffcc; font-family: monospace; font-size: 14px; opacity: 0;
-    pointer-events: none; transition: opacity 1.5s ease-in-out; z-index: 5;
-    letter-spacing: 2px; text-shadow: 0px 0px 8px #000000;
-`;
-document.body.appendChild(idleText);
-
-let idleTimer = null;
-function resetIdleTimer() {
-    idleText.style.opacity = '0';
-    clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => { idleText.style.opacity = '0.6'; }, 10000);
-}
-
-renderer.domElement.addEventListener('pointermove', resetIdleTimer);
-renderer.domElement.addEventListener('pointerdown', resetIdleTimer);
-renderer.domElement.addEventListener('touchstart', resetIdleTimer, { passive: true });
-resetIdleTimer();
 
 // --- 10. INTERFAZ DE USUARIO DEV ---
 const menuToggleBtn = document.createElement('button');
@@ -411,9 +385,11 @@ function setUIVisible(visible) {
     uiVisible = visible;
     menuToggleBtn.style.display = visible ? 'block' : 'none';
     panel.style.display = visible && panelOpen ? 'block' : 'none';
+    volCont.style.display = visible ? 'flex' : 'none';
 }
 setUIVisible(isDevMode);
 
+// Gesto secreto: 5 toques rápidos en la esquina superior izquierda muestra/oculta el panel
 const secretCorner = document.createElement('div');
 secretCorner.style.cssText = 'position: fixed; top: 0; left: 0; width: 70px; height: 70px; z-index: 20;';
 document.body.appendChild(secretCorner);
@@ -439,9 +415,9 @@ const controlsRegistry = {};
 function applySideEffects(key) {
     if (key === 'planeCount') buildGroup();
     if (key === 'material') updateMaterial();
-    if (key === 'gesturesEnabled') {
-        updateDpadVisibility();
-        if (!params.gesturesEnabled) controls.enabled = true;
+    if (key === 'gesturesEnabled' && !params.gesturesEnabled) {
+        cancelHold();
+        controls.enabled = true;
     }
     if (key === 'profile') startMorph(PROFILE_CYCLE.indexOf(params.profile));
 }
@@ -554,13 +530,18 @@ addSlider('Cantidad de planos', 'planeCount', 6, 120, 1);
 addSlider('Altura total (pellizco)', 'totalHeight', 0.5, 4, 0.05);
 addSlider('Vueltas de twist', 'twistTurns', 0, 6, 0.05);
 addSlider('Radio de espiral', 'spiralRadius', 0, 1.5, 0.02);
-addSlider('Ruido / glitch', 'jitter', 0, 1.5, 0.02);
+addSlider('Ruido / glitch (mantener)', 'jitter', 0, 1.5, 0.02);
 addSelect('Perfil de silueta', 'profile', [['huso', 'Huso'], ['doble', 'Doble lóbulo'], ['conico', 'Cónico'], ['glitch', 'Aleatorio'], ['constante', 'Cilindro']]);
 addSelect('Material', 'material', [['fresnel', 'Fresnel'], ['wireframe', 'Wireframe'], ['solido', 'Sólido'], ['espejo', 'Espejo']]);
 addSlider('Amplitud de respiración', 'breathAmplitude', 0, 0.3, 0.01);
 addSlider('Velocidad de respiración', 'breathSpeed', 0, 10, 0.1);
 addSlider('Rotación pasiva', 'idleRotSpeed', 0, 1.5, 0.02);
 addCheckbox('Reacciona al presionar', 'touchReacts');
+
+const gestureHint = document.createElement('div');
+gestureHint.textContent = 'Gestos: arrastrar = girar · tap = perfil · doble tap = memoria · mantener quieto = corromper · pellizco = altura · inclinar = espiral.';
+gestureHint.style.cssText = 'font-size: 10px; color:#5a9; line-height:1.4; margin-top:4px;';
+panel.appendChild(gestureHint);
 
 function syncPanelFromParams() {
     for (const key of ['totalHeight', 'jitter', 'spiralRadius']) {
@@ -587,6 +568,17 @@ let touchHasDragged = false;
 let touchesActive = 0;
 let pinchStartDist = null;
 let pinchStartHeight = params.totalHeight;
+
+// Mantener un dedo quieto = "corromper" el recuerdo (sube el glitch mientras se mantiene)
+let isHolding = false;
+let holdTimer = null;
+const HOLD_MS = 450;
+
+function cancelHold() {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    isHolding = false;
+}
 
 let ultimoTapTime = 0;
 let tapTimer = null;
@@ -618,13 +610,24 @@ function distanceBetweenTouches(touches) {
 dom.addEventListener('touchstart', (e) => {
     if (!params.gesturesEnabled) return;
     touchesActive = e.touches.length;
-    controls.enabled = false;
+
     if (e.touches.length === 1) {
+        // Un dedo: la cámara gira sola (OrbitControls). Solo se frena si el dedo se queda quieto.
         touchStartTime = performance.now();
         touchStartX = e.touches[0].clientX;
         touchStartY = e.touches[0].clientY;
         touchHasDragged = false;
+        clearTimeout(holdTimer);
+        holdTimer = setTimeout(() => {
+            if (touchesActive === 1 && !touchHasDragged) {
+                isHolding = true;
+                controls.enabled = false;
+            }
+        }, HOLD_MS);
     } else if (e.touches.length === 2) {
+        // Dos dedos: pellizco = altura; la cámara se congela
+        cancelHold();
+        controls.enabled = false;
         pinchStartDist = distanceBetweenTouches(e.touches);
         pinchStartHeight = params.totalHeight;
     }
@@ -634,14 +637,12 @@ dom.addEventListener('touchmove', (e) => {
     if (!params.gesturesEnabled) return;
     touchesActive = e.touches.length;
     if (e.touches.length === 1) {
+        if (isHolding) return;
         const dx = e.touches[0].clientX - touchStartX;
         const dy = e.touches[0].clientY - touchStartY;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist > 10) {
+        if (Math.sqrt(dx * dx + dy * dy) > 10) {
             touchHasDragged = true;
-            params.jitter = THREE.MathUtils.clamp(params.jitter + dist * 0.0015, 0, 2.0);
-            touchStartX = e.touches[0].clientX;
-            touchStartY = e.touches[0].clientY;
+            clearTimeout(holdTimer);
         }
     } else if (e.touches.length === 2 && pinchStartDist) {
         const dist = distanceBetweenTouches(e.touches);
@@ -653,25 +654,32 @@ dom.addEventListener('touchend', (e) => {
     if (!params.gesturesEnabled) return;
     touchesActive = e.touches.length;
     if (e.touches.length === 0) {
+        clearTimeout(holdTimer);
+        const wasHolding = isHolding;
+        isHolding = false;
         const duration = performance.now() - touchStartTime;
-        if (!touchHasDragged && duration < 300) handleTap();
+        if (!touchHasDragged && !wasHolding && duration < 300) handleTap();
         pinchStartDist = null;
         controls.enabled = true;
     } else if (e.touches.length === 1) {
+        // Se levantó un dedo del pellizco: el que queda no cuenta como tap ni gira la cámara
+        cancelHold();
         pinchStartDist = null;
         touchStartTime = performance.now();
         touchStartX = e.touches[0].clientX;
         touchStartY = e.touches[0].clientY;
-        touchHasDragged = true; 
+        touchHasDragged = true;
     }
 }, { passive: true });
 
 dom.addEventListener('touchcancel', () => {
+    cancelHold();
     touchesActive = 0;
     pinchStartDist = null;
-    controls.enabled = true; 
+    controls.enabled = true;
 }, { passive: true });
 
+// Mouse (para probar en la PC): el tap se detecta con pointerup
 let mouseDownX = 0;
 let mouseDownY = 0;
 let mouseDownTime = 0;
@@ -729,7 +737,11 @@ function animate(now) {
 
     if (params.gesturesEnabled) {
         params.spiralRadius = THREE.MathUtils.lerp(params.spiralRadius, tiltTarget, 0.05);
-        if (touchesActive === 0 && params.jitter > 0) params.jitter = Math.max(0, params.jitter - delta * 0.5);
+        if (isHolding) {
+            params.jitter = Math.min(2.0, params.jitter + delta * 0.9);
+        } else if (touchesActive === 0 && params.jitter > 0) {
+            params.jitter = Math.max(0, params.jitter - delta * 0.5);
+        }
     }
 
     if (uiVisible) {
@@ -780,15 +792,6 @@ function animate(now) {
     const fadeSpeed = isInteracting ? 2.0 : 0.4;
     interactionLevel = THREE.MathUtils.lerp(interactionLevel, targetInteraction, Math.min(delta * fadeSpeed, 1));
 
-    if (manualRotation.x !== 0 || manualRotation.y !== 0) {
-        const offset = new THREE.Vector3().copy(camera.position).sub(controls.target);
-        const spherical = new THREE.Spherical().setFromVector3(offset);
-        spherical.theta -= manualRotation.x;
-        spherical.phi += manualRotation.y;
-        spherical.phi = THREE.MathUtils.clamp(spherical.phi, 0.1, Math.PI - 0.1);
-        offset.setFromSpherical(spherical);
-        camera.position.copy(controls.target).add(offset);
-    }
     controls.update();
 
     if (audioActivo && synths.length > 0) {
@@ -809,19 +812,16 @@ function animate(now) {
         audioState.spread += (spreadDesdeAltura(alturaN) - audioState.spread) * k;
         if (masterFilter) masterFilter.frequency.value = audioState.cutoff;
 
-        // ARREGLO DE RENDIMIENTO: Solo actualizamos los cálculos del sintetizador que está sonando.
-        // Ignoramos a los demás para que el procesador de la tablet respire y no petardee.
+        // Solo se actualiza el sinte que suena (y el de destino durante un morph) para cuidar el CPU de la tablet.
         const updateSynth = (index) => {
             const s = synths[index];
             s.frequency.value = audioState.freq;
             s.modulationIndex.value = audioState.mod;
             s.harmonicity.value = audioState.harm * synthConfigs[index].baseHarm;
-            s.detune.value = (index - 2) * audioState.spread; 
+            s.detune.value = (index - 2) * audioState.spread;
         };
 
         updateSynth(currentProfileIndex);
-        
-        // Si hay una transformación en progreso, también actualizamos el sintetizador de destino
         if (morphProgress < 1.0 && targetProfileIndex !== currentProfileIndex) {
             updateSynth(targetProfileIndex);
         }
@@ -842,4 +842,5 @@ function animate(now) {
     renderer.render(scene, camera);
 }
 
+iniciarNarrativa()
 requestAnimationFrame(animate);
