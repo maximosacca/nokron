@@ -6,8 +6,8 @@
 
 // ✎ TEXTOS: editá las estrofas acá. Cada estrofa es una pantalla; cada string, un renglón.
 export const ESTROFAS_POR_DEFECTO = [
-    ['KIOKU VOSPOMINANIYE.', 'LA MEMORIA NO ES NEUTRAL', 'JUZGA LO QUE HICIMOS'],
-    ['RECUERDA LO BUENO Y LO PERDIDO', 'REFLEJA LO QUE FUIMOS', 'Y LO QUE NO SUPIMOS CUIDAR'],
+    [ 'LA MEMORIA NO ES NEUTRAL', 'JUZGA LO QUE HICIMOS', 'RECUERDA LO BUENO Y LO PERDIDO'],
+    [ 'REFLEJA LO QUE FUIMOS', 'Y LO QUE NO SUPIMOS CUIDAR'],
     ['SE QUEDA', 'PARA QUE NO LO OLVIDEMOS'],
 ];
 
@@ -17,7 +17,7 @@ export function iniciarNarrativa(opciones = {}) {
     const {
         estrofas = ESTROFAS_POR_DEFECTO,
         invitacion = 'TOCÁ LA SUPERFICIE', // línea chica al pie, siempre invita a interactuar
-        idleMs = 30000, // sin tocar durante este tiempo -> aparece el texto
+        idleMs = 15000, // sin tocar durante este tiempo -> aparece el texto
         visibleMs = 14000, // cuánto dura cada estrofa en pantalla
         pausaMs = 8000, // pausa entre estrofas mientras nadie toca
         opacidadFondo = 0.7, // qué tan oscuro queda el fondo detrás del texto (0 a 1)

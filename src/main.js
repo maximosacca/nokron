@@ -31,10 +31,11 @@ document.head.appendChild(kioskStyle);
 // --- 1. CONFIGURACIÓN BÁSICA ---
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-camera.position.set(0, 0.5, 4.5);
+camera.position.set(0, 0.5, 2.8);
 
+const maxPixelRatio = (navigator.maxTouchPoints || 0) > 0 ? 1.5 : 2;
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxPixelRatio));
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
@@ -42,7 +43,7 @@ document.body.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.05;
-controls.minDistance = 1.5;
+controls.minDistance = 1.2;
 controls.maxDistance = 8;
 controls.enablePan = false;
 controls.target.set(0, 0.5, 0);
@@ -67,6 +68,9 @@ const synthConfigs = [
 
 let synths = [];
 let synthGains = [];
+const voiceProfiles = [0, 1];
+let activeVoice = 0;
+let targetVoice = null;
 let audioActivo = false;
 let inicializandoAudio = false;
 let wakeLockSentinel = null;
@@ -149,14 +153,20 @@ function crearSintes() {
     audioState.spread = spreadDesdeAltura(n0);
     masterFilter = new Tone.Filter({ type: 'lowpass', frequency: audioState.cutoff, rolloff: -12, Q: 1 }).connect(masterVolume);
 
-    for (let i = 0; i < 5; i++) {
+    // Solo dos voces: la activa y la que entra durante un morph. Las cinco
+    // FMSynth anteriores corrían siempre y saturaban el CPU de la tablet.
+    activeVoice = 0;
+    const perfilActivo = currentProfileIndex;
+    const perfilDestino = targetProfileIndex;
+    for (let i = 0; i < 2; i++) {
+        const profileIndex = i === 0 ? perfilActivo : perfilDestino;
         const gainNode = new Tone.Gain(0).connect(masterFilter);
         const s = new Tone.FMSynth({
             volume: -8,
-            harmonicity: synthConfigs[i].baseHarm,
+            harmonicity: synthConfigs[profileIndex].baseHarm,
             modulationIndex: 1,
-            oscillator: { type: synthConfigs[i].osc },
-            modulation: { type: synthConfigs[i].mod },
+            oscillator: { type: synthConfigs[profileIndex].osc },
+            modulation: { type: synthConfigs[profileIndex].mod },
             envelope: { attack: 2, decay: 0.1, sustain: 1, release: 2 },
         }).connect(gainNode);
 
@@ -164,7 +174,22 @@ function crearSintes() {
         synths.push(s);
         synthGains.push(gainNode);
     }
-    synthGains[0].gain.value = 1;
+    voiceProfiles[0] = perfilActivo;
+    voiceProfiles[1] = perfilDestino;
+    targetVoice = (morphProgress < 1.0 && perfilDestino !== perfilActivo) ? 1 : null;
+    const mezcla = targetVoice === 1 ? THREE.MathUtils.smoothstep(morphProgress, 0, 1) : 0;
+    synthGains[0].gain.value = 1 - mezcla;
+    synthGains[1].gain.value = mezcla;
+}
+
+// Reconfigura la voz que está en silencio para el próximo perfil.
+function configurarVoz(voz, profileIndex) {
+    if (!synths[voz] || voiceProfiles[voz] === profileIndex) return;
+    const cfg = synthConfigs[profileIndex];
+    synths[voz].oscillator.type = cfg.osc;
+    synths[voz].modulation.type = cfg.mod;
+    synths[voz].harmonicity.value = cfg.baseHarm;
+    voiceProfiles[voz] = profileIndex;
 }
 
 async function onUserGesture() {
@@ -192,7 +217,7 @@ async function onUserGesture() {
         crearSintes();
         audioActivo = true;
         audioHint.style.opacity = '0';
-        console.log('Sistema de audio en línea: 5 sintes activados');
+        console.log('Sistema de audio en línea: 2 sintes activados');
     } catch (err) {
         console.warn('El audio no arrancó, se reintentará en el próximo toque:', err);
         inicializandoAudio = false;
@@ -308,11 +333,19 @@ function startMorph(newIndex) {
     if (morphProgress < 1.0) {
         if (newIndex === targetProfileIndex) return;
         currentProfileIndex = targetProfileIndex;
+        if (targetVoice !== null) {
+            activeVoice = targetVoice;
+            targetVoice = null;
+        }
     }
     if (newIndex === currentProfileIndex) { morphProgress = 1.0; return; }
     targetProfileIndex = newIndex;
     morphProgress = 0.0;
     params.profile = PROFILE_CYCLE[newIndex];
+    if (synths.length) {
+        targetVoice = 1 - activeVoice;
+        configurarVoz(targetVoice, newIndex);
+    }
     const uiSelect = controlsRegistry['profile']?.select;
     if (uiSelect) uiSelect.value = params.profile;
 }
@@ -705,7 +738,7 @@ window.addEventListener('deviceorientation', (e) => {
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxPixelRatio));
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
@@ -715,6 +748,10 @@ let time = 0;
 
 let interactionLevel = 0.20;
 let syncPanelTimer = 0;
+// Los parámetros de audio se actualizan a ~10 Hz, no en cada frame:
+// programar automation 60 veces por segundo satura el hilo de audio en tablets.
+let audioControlAccum = 0;
+const AUDIO_CONTROL_INTERVAL = 0.1;
 
 function obtenerEscalaPerfil(tipo, t, glitchSeed) {
     switch (tipo) {
@@ -754,6 +791,10 @@ function animate(now) {
         if (morphProgress >= 1.0) {
             morphProgress = 1.0;
             currentProfileIndex = targetProfileIndex;
+            if (targetVoice !== null) {
+                activeVoice = targetVoice;
+                targetVoice = null;
+            }
         }
     }
 
@@ -795,47 +836,56 @@ function animate(now) {
     controls.update();
 
     if (audioActivo && synths.length > 0) {
-        const polar = controls.getPolarAngle();
-        const targetFreq = THREE.MathUtils.mapLinear(polar, 0, Math.PI, 60, 400);
-        const jitterClamped = THREE.MathUtils.clamp(params.jitter, 0, 1.5);
-        const targetMod = THREE.MathUtils.mapLinear(jitterClamped, 0, 1.5, 1, 50);
-        const targetHarm = THREE.MathUtils.mapLinear(params.twistTurns, 0, 6, 0.5, 4);
+        audioControlAccum += delta;
+        if (audioControlAccum >= AUDIO_CONTROL_INTERVAL) {
+            const controlDelta = audioControlAccum;
+            audioControlAccum = 0;
 
-        const k = 1 - Math.exp(-delta * 10);
-        audioState.freq += (targetFreq - audioState.freq) * k;
-        audioState.mod += (targetMod - audioState.mod) * k;
-        audioState.harm += (targetHarm - audioState.harm) * k;
+            const polar = controls.getPolarAngle();
+            const targetFreq = THREE.MathUtils.mapLinear(polar, 0, Math.PI, 60, 400);
+            const jitterClamped = THREE.MathUtils.clamp(params.jitter, 0, 1.5);
+            const targetMod = THREE.MathUtils.mapLinear(jitterClamped, 0, 1.5, 1, 50);
+            const targetHarm = THREE.MathUtils.mapLinear(params.twistTurns, 0, 6, 0.5, 4);
 
-        const alturaN = alturaNormalizada();
-        const targetCutoff = cutoffDesdeAltura(alturaN);
-        audioState.cutoff = Math.exp(Math.log(audioState.cutoff) + (Math.log(targetCutoff) - Math.log(audioState.cutoff)) * k);
-        audioState.spread += (spreadDesdeAltura(alturaN) - audioState.spread) * k;
-        if (masterFilter) masterFilter.frequency.value = audioState.cutoff;
+            const k = 1 - Math.exp(-controlDelta * 10);
+            audioState.freq += (targetFreq - audioState.freq) * k;
+            audioState.mod += (targetMod - audioState.mod) * k;
+            audioState.harm += (targetHarm - audioState.harm) * k;
 
-        // Solo se actualiza el sinte que suena (y el de destino durante un morph) para cuidar el CPU de la tablet.
-        const updateSynth = (index) => {
-            const s = synths[index];
-            s.frequency.value = audioState.freq;
-            s.modulationIndex.value = audioState.mod;
-            s.harmonicity.value = audioState.harm * synthConfigs[index].baseHarm;
-            s.detune.value = (index - 2) * audioState.spread;
-        };
+            const alturaN = alturaNormalizada();
+            const targetCutoff = cutoffDesdeAltura(alturaN);
+            audioState.cutoff = Math.exp(Math.log(audioState.cutoff) + (Math.log(targetCutoff) - Math.log(audioState.cutoff)) * k);
+            audioState.spread += (spreadDesdeAltura(alturaN) - audioState.spread) * k;
 
-        updateSynth(currentProfileIndex);
-        if (morphProgress < 1.0 && targetProfileIndex !== currentProfileIndex) {
-            updateSynth(targetProfileIndex);
-        }
+            const rampTime = AUDIO_CONTROL_INTERVAL * 1.2;
+            if (masterFilter) masterFilter.frequency.rampTo(audioState.cutoff, rampTime);
 
-        for (let i = 0; i < synthGains.length; i++) {
-            let g = 0;
-            if (morphProgress >= 1.0) {
-                if (i === currentProfileIndex) g = interactionLevel;
-            } else if (i === currentProfileIndex) {
-                g = (1.0 - progresoSuavizado) * interactionLevel;
-            } else if (i === targetProfileIndex) {
-                g = progresoSuavizado * interactionLevel;
+            // Solo se actualiza la voz activa (y la de destino durante un morph) para cuidar el CPU de la tablet.
+            const updateSynth = (voz) => {
+                const s = synths[voz];
+                const baseHarm = synthConfigs[voiceProfiles[voz]].baseHarm;
+                s.frequency.rampTo(audioState.freq, rampTime);
+                s.modulationIndex.rampTo(audioState.mod, rampTime);
+                s.harmonicity.rampTo(audioState.harm * baseHarm, rampTime);
+                s.detune.rampTo((voiceProfiles[voz] - 2) * audioState.spread, rampTime);
+            };
+
+            updateSynth(activeVoice);
+            if (morphProgress < 1.0 && targetVoice !== null) {
+                updateSynth(targetVoice);
             }
-            synthGains[i].gain.value = g;
+
+            for (let i = 0; i < synthGains.length; i++) {
+                let g = 0;
+                if (morphProgress >= 1.0) {
+                    if (i === activeVoice) g = interactionLevel;
+                } else if (i === activeVoice) {
+                    g = (1.0 - progresoSuavizado) * interactionLevel;
+                } else if (i === targetVoice) {
+                    g = progresoSuavizado * interactionLevel;
+                }
+                synthGains[i].gain.rampTo(g, rampTime);
+            }
         }
     }
 
